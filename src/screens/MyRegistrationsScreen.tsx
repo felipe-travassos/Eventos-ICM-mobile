@@ -1,4 +1,4 @@
-﻿// src/screens/MyRegistrationsScreen.tsx
+// src/screens/MyRegistrationsScreen.tsx
 import React, { useState, useEffect } from "react";
 import {
     View,
@@ -10,11 +10,14 @@ import {
     TouchableOpacity,
     Alert,
     Modal,
+    Linking,
+    Clipboard,
 } from "react-native";
 import { collection, getDocs, query, where, orderBy, doc, deleteDoc } from "firebase/firestore";
 import { db } from "../lib/firebase/config";
-import { EventRegistration, Event } from "../types";
+import { EventRegistration, Event, PaymentData } from "../types";
 import { useAuth } from "../contexts/AuthContext";
+import { processRegistrationPayment, checkPaymentStatus, updatePaymentStatus } from "../lib/firebase/payments";
 
 interface MyRegistrationsScreenProps {
     navigation: any;
@@ -27,7 +30,10 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
     const [deletingId, setDeletingId] = useState<string | null>(null);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [registrationToDelete, setRegistrationToDelete] = useState<EventRegistration & { event?: Event } | null>(null);
-    const { currentUser } = useAuth();
+    const [processingPayment, setProcessingPayment] = useState<string | null>(null);
+    const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const { currentUser, userData } = useAuth();
 
     const loadRegistrations = async () => {
         if (!currentUser) return;
@@ -156,6 +162,162 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
         return registration.paymentStatus === "pending";
     };
 
+    const canMakePayment = (registration: EventRegistration & { event?: Event }) => {
+        // Pode fazer pagamento se estiver aprovado e pagamento pendente
+        return registration.status === "approved" && registration.paymentStatus === "pending" && registration.event?.price && registration.event.price > 0;
+    };
+
+    const handlePayment = async (registration: EventRegistration & { event?: Event }) => {
+        if (!userData || !registration.event) return;
+
+        console.log('🚀 Iniciando processo de pagamento para:', registration.id);
+
+        // ✅ Verificar se já existe um paymentId
+        if (registration.paymentId) {
+            console.log('💾 Pagamento já existe, recuperando dados do PIX...');
+            console.log('🔍 PaymentId encontrado:', registration.paymentId);
+            
+            try {
+                // Buscar dados do pagamento existente
+                const statusUrl = `http://192.168.1.100:3000/api/pix/status?paymentId=${registration.paymentId}&registrationId=${registration.id}`;
+                console.log('📡 Fazendo requisição para status:', statusUrl);
+                
+                const response = await fetch(statusUrl);
+                console.log('📊 Status response:', response.status, response.ok);
+
+                if (response.ok) {
+                    const statusData = await response.json();
+                    console.log('✅ Status data recebido:', statusData);
+
+                    // Buscar dados completos do PIX
+                    const pixUrl = `http://192.168.1.100:3000/api/pix/get-payment?paymentId=${registration.paymentId}`;
+                    console.log('📡 Fazendo requisição para PIX data:', pixUrl);
+                    
+                    const pixResponse = await fetch(pixUrl);
+                    console.log('📊 PIX response:', pixResponse.status, pixResponse.ok);
+
+                    if (pixResponse.ok) {
+                        const pixData = await pixResponse.json();
+                        console.log('✅ PIX data recebido:', JSON.stringify(pixData, null, 2));
+                        
+                        // Verificar se os dados essenciais existem
+                        if (!pixData.qr_code || !pixData.qr_code_base64) {
+                            console.error('❌ Dados essenciais do PIX não encontrados:', {
+                                hasQrCode: !!pixData.qr_code,
+                                hasQrCodeBase64: !!pixData.qr_code_base64,
+                                hasTicketUrl: !!pixData.ticket_url
+                            });
+                            // Continuar para criar novo pagamento
+                        } else {
+                            // Criar PaymentData compatível
+                            const existingPaymentData = {
+                                registrationId: registration.id,
+                                eventId: registration.eventId,
+                                amount: registration.event.price || 0,
+                                description: `Inscrição: ${registration.event.title}`,
+                                qrCode: pixData.qr_code,
+                                qrCodeBase64: pixData.qr_code_base64,
+                                ticketUrl: pixData.ticket_url,
+                                paymentId: pixData.id,
+                                externalReference: pixData.external_reference
+                            };
+
+                            console.log('🎯 PaymentData criado:', JSON.stringify(existingPaymentData, null, 2));
+                            
+                            // Verificar se setPaymentData e setShowPaymentModal existem
+                            console.log('🔧 Verificando funções:', {
+                                hasSetPaymentData: typeof setPaymentData === 'function',
+                                hasSetShowPaymentModal: typeof setShowPaymentModal === 'function'
+                            });
+                            
+                            setPaymentData(existingPaymentData);
+                            setShowPaymentModal(true);
+                            
+                            console.log('✅ PIX existente recuperado com sucesso - Modal deve abrir');
+                            console.log('🎯 Estado atual:', {
+                                paymentDataSet: !!existingPaymentData,
+                                modalShouldShow: true
+                            });
+                            return;
+                        }
+                    } else {
+                        const pixError = await pixResponse.text();
+                        console.error('❌ Erro na resposta do PIX:', pixError);
+                    }
+                } else {
+                    const statusError = await response.text();
+                    console.error('❌ Erro na resposta do status:', statusError);
+                }
+
+                // Se não conseguir buscar, continuar para criar novo
+                console.log('⚠️ Não foi possível recuperar PIX existente, criando novo...');
+            } catch (error) {
+                console.error('❌ Erro ao recuperar PIX existente:', error);
+                // Continuar para criar novo pagamento
+            }
+        }
+
+        // Se não existe paymentId ou não conseguiu recuperar, criar novo
+        setProcessingPayment(registration.id);
+
+        try {
+            const paymentResult = await processRegistrationPayment(
+                registration.id,
+                registration.event,
+                userData
+            );
+
+            setPaymentData(paymentResult);
+            setShowPaymentModal(true);
+
+            console.log('✅ Novo pagamento processado com sucesso');
+
+        } catch (error: any) {
+            console.error('❌ Erro no processo de pagamento:', error);
+            Alert.alert('Erro', `Erro ao processar pagamento: ${error.message}`);
+        } finally {
+            setProcessingPayment(null);
+        }
+    };
+
+    const handleCopyPix = () => {
+        if (paymentData?.qrCode) {
+            Clipboard.setString(paymentData.qrCode);
+            Alert.alert('Sucesso', 'Código PIX copiado para a área de transferência!');
+        }
+    };
+
+    const handleCheckPaymentStatus = async () => {
+        if (!paymentData?.paymentId) return;
+
+        try {
+            console.log('🔍 Verificando status do pagamento...');
+
+            const statusResult = await checkPaymentStatus(paymentData.paymentId, paymentData.registrationId);
+
+            if (statusResult.status === 'approved') {
+                // Atualizar status no Firestore
+                await updatePaymentStatus(paymentData.registrationId, 'paid');
+
+                // Atualizar estado local
+                setRegistrations(prev => prev.map(reg =>
+                    reg.id === paymentData.registrationId
+                        ? { ...reg, paymentStatus: 'paid' }
+                        : reg
+                ));
+
+                Alert.alert('Sucesso', '✅ Pagamento confirmado! Inscrição ativada.');
+                setShowPaymentModal(false);
+                setPaymentData(null);
+            } else {
+                Alert.alert('Aguarde', `⚠️ Pagamento ainda não confirmado. Status: ${statusResult.status}. Tente novamente em alguns instantes.`);
+            }
+        } catch (error: any) {
+            console.error('❌ Erro ao verificar status:', error);
+            Alert.alert('Erro', `Erro ao verificar status: ${error.message}`);
+        }
+    };
+
     const handleDeletePress = (registration: EventRegistration & { event?: Event }) => {
         setRegistrationToDelete(registration);
         setShowDeleteModal(true);
@@ -220,17 +382,36 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                     </Text>
                 </View>
                 
-                {canDeleteRegistration(item) && (
-                    <TouchableOpacity
-                        style={[styles.deleteButton, deletingId === item.id && styles.deleteButtonDisabled]}
-                        onPress={() => handleDeletePress(item)}
-                        disabled={deletingId === item.id}
-                    >
-                        <Text style={styles.deleteButtonText}>
-                            {deletingId === item.id ? "Excluindo..." : "Excluir"}
-                        </Text>
-                    </TouchableOpacity>
-                )}
+                <View style={styles.buttonsContainer}>
+                    {canMakePayment(item) && (
+                        <TouchableOpacity
+                            style={[styles.payButton, processingPayment === item.id && styles.payButtonDisabled]}
+                            onPress={() => handlePayment(item)}
+                            disabled={processingPayment === item.id}
+                        >
+                            <Text style={styles.payButtonText}>
+                                {processingPayment === item.id 
+                                    ? "Processando..." 
+                                    : item.paymentId 
+                                        ? "Ver PIX" 
+                                        : "Pagar"
+                                }
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+                    
+                    {canDeleteRegistration(item) && (
+                        <TouchableOpacity
+                            style={[styles.deleteButton, deletingId === item.id && styles.deleteButtonDisabled]}
+                            onPress={() => handleDeletePress(item)}
+                            disabled={deletingId === item.id}
+                        >
+                            <Text style={styles.deleteButtonText}>
+                                {deletingId === item.id ? "Excluindo..." : "Excluir"}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
             </View>
         </TouchableOpacity>
     );
@@ -302,6 +483,74 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                                 <Text style={styles.modalConfirmText}>Excluir</Text>
                             </TouchableOpacity>
                         </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Modal de pagamento PIX */}
+            <Modal
+                visible={showPaymentModal}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setShowPaymentModal(false)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.pixModalContent}>
+                        <Text style={styles.pixModalTitle}>Pagamento PIX</Text>
+                        
+                        {paymentData && (
+                            <>
+                                <View style={styles.pixPaymentInfo}>
+                                    <View style={styles.pixInfoRow}>
+                                        <Text style={styles.pixInfoLabel}>Valor:</Text>
+                                        <Text style={styles.pixInfoValue}>R$ {paymentData.amount.toFixed(2)}</Text>
+                                    </View>
+                                    <View style={styles.pixInfoRow}>
+                                        <Text style={styles.pixInfoLabel}>Evento:</Text>
+                                        <Text style={styles.pixInfoValue} numberOfLines={2}>
+                                            {paymentData.eventName}
+                                        </Text>
+                                    </View>
+                                </View>
+                                
+                                <View style={styles.pixQrContainer}>
+                                    <Text style={styles.pixQrCode} numberOfLines={4}>
+                                        {paymentData.qrCode}
+                                    </Text>
+                                </View>
+                                
+                                <Text style={styles.pixInstructions}>
+                                    1. Copie o código PIX acima{'\n'}
+                                    2. Abra seu app bancário{'\n'}
+                                    3. Cole o código na área PIX{'\n'}
+                                    4. Confirme o pagamento{'\n'}
+                                    5. Volte aqui e clique em "Verificar Status"
+                                </Text>
+                                
+                                <View style={styles.pixModalButtons}>
+                                    <TouchableOpacity
+                                        style={styles.pixCopyButton}
+                                        onPress={handleCopyPix}
+                                    >
+                                        <Text style={styles.pixCopyButtonText}>📋 Copiar PIX</Text>
+                                    </TouchableOpacity>
+                                    
+                                    <TouchableOpacity
+                                        style={styles.pixCheckButton}
+                                        onPress={handleCheckPaymentStatus}
+                                    >
+                                        <Text style={styles.pixCheckButtonText}>🔍 Verificar Status</Text>
+                                    </TouchableOpacity>
+                                    
+                                    <TouchableOpacity
+                                        style={styles.pixCloseButton}
+                                        onPress={() => setShowPaymentModal(false)}
+                                    >
+                                        <Text style={styles.pixCloseButtonText}>Fechar</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </>
+                        )}
                     </View>
                 </View>
             </Modal>
@@ -385,17 +634,34 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#999',
     },
+    buttonsContainer: {
+        flexDirection: 'row',
+        gap: 8,
+    },
     deleteButton: {
         backgroundColor: '#FF4444',
         paddingHorizontal: 16,
         paddingVertical: 8,
         borderRadius: 6,
-        marginLeft: 12,
     },
     deleteButtonDisabled: {
         backgroundColor: '#CCCCCC',
     },
     deleteButtonText: {
+        color: '#FFFFFF',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    payButton: {
+        backgroundColor: '#28A745',
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: 6,
+    },
+    payButtonDisabled: {
+        backgroundColor: '#CCCCCC',
+    },
+    payButtonText: {
         color: '#FFFFFF',
         fontSize: 14,
         fontWeight: '600',
@@ -501,5 +767,108 @@ const styles = StyleSheet.create({
         color: "#fff",
         fontSize: 16,
         fontWeight: "600",
+    },
+    // Estilos do modal PIX
+    pixModalContent: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        padding: 24,
+        width: '90%',
+        maxWidth: 400,
+        maxHeight: '80%',
+    },
+    pixModalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#333',
+        marginBottom: 20,
+        textAlign: 'center',
+    },
+    pixPaymentInfo: {
+        marginBottom: 20,
+    },
+    pixInfoRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginBottom: 8,
+        alignItems: 'center',
+    },
+    pixInfoLabel: {
+        fontSize: 16,
+        color: '#666',
+        fontWeight: '600',
+    },
+    pixInfoValue: {
+        fontSize: 16,
+        color: '#333',
+        fontWeight: 'bold',
+    },
+    pixQrContainer: {
+        alignItems: 'center',
+        marginBottom: 20,
+        padding: 16,
+        backgroundColor: '#F8F9FA',
+        borderRadius: 8,
+    },
+    pixQrCode: {
+        fontSize: 11,
+        color: '#333',
+        textAlign: 'center',
+        fontFamily: 'monospace',
+        lineHeight: 16,
+        padding: 12,
+        backgroundColor: '#FFFFFF',
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#E5E5E5',
+        width: '100%',
+    },
+    pixInstructions: {
+        fontSize: 14,
+        color: '#666',
+        textAlign: 'left',
+        lineHeight: 22,
+        marginBottom: 24,
+        paddingHorizontal: 8,
+    },
+    pixModalButtons: {
+        gap: 12,
+    },
+    pixCopyButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 14,
+        borderRadius: 8,
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    pixCopyButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: '600',
+    },
+    pixCheckButton: {
+        backgroundColor: '#28A745',
+        paddingVertical: 14,
+        borderRadius: 8,
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    pixCheckButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: '600',
+    },
+    pixCloseButton: {
+        backgroundColor: '#F5F5F5',
+        paddingVertical: 14,
+        borderRadius: 8,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#E5E5E5',
+    },
+    pixCloseButtonText: {
+        color: '#666',
+        fontSize: 16,
+        fontWeight: '600',
     },
 });

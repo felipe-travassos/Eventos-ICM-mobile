@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { useAuth } from "../contexts/AuthContext";
 import LoginScreen from "../screens/LoginScreen";
+import RegisterScreen from "../screens/RegisterScreen";
 import EventsScreen from "../screens/EventsScreen";
 import EventDetailsScreen from "../screens/EventDetailsScreen";
 import MyRegistrationsScreen from "../screens/MyRegistrationsScreen";
@@ -28,6 +29,7 @@ export type MyRegistrationsStackParamList = {
 export type RootStackParamList = {
     Main: undefined;
     Login: undefined;
+    Register: undefined;
 };
 
 const Stack = createStackNavigator<EventsStackParamList>();
@@ -151,7 +153,10 @@ export default function Navigation() {
                 {currentUser ? (
                     <RootStack.Screen name="Main" component={MainTabs} />
                 ) : (
-                    <RootStack.Screen name="Login" component={LoginScreen} />
+                    <>
+                        <RootStack.Screen name="Login" component={LoginScreen} />
+                        <RootStack.Screen name="Register" component={RegisterScreen} />
+                    </>
                 )}
             </RootStack.Navigator>
         </NavigationContainer>

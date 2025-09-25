@@ -16,6 +16,8 @@ import { Event, EventRegistration } from "../types";
 import { useAuth } from "../contexts/AuthContext";
 import { getChurchById } from "../lib/firebase/churches";
 import { EventsStackParamList, MyRegistrationsStackParamList } from "../components/Navigation";
+import { registerForEvent, getActiveEventsWithSync } from "../lib/firebase/events";
+import { useRegistrationEligibility } from "../lib/firebase/userRegistrationValidation";
 
 // Tipos para as diferentes rotas que podem levar ao EventDetailsScreen
 type EventDetailsScreenProps = 
@@ -29,6 +31,7 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
     const [registering, setRegistering] = useState(false);
     const [userRegistration, setUserRegistration] = useState<EventRegistration | null>(null);
     const { currentUser, userData } = useAuth();
+    const { canRegister: canUserRegister, errorMessage } = useRegistrationEligibility(userData);
 
     useEffect(() => {
         loadEventDetails();
@@ -94,53 +97,62 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
     const handleRegistration = async () => {
         if (!currentUser || !event || !userData) return;
 
-        setRegistering(true);
-        
-        try {
-            // Buscar dados da igreja para obter o pastorName
-            let pastorName = "";
-            if (userData.churchId) {
-                try {
-                    const churchData = await getChurchById(userData.churchId);
-                    pastorName = churchData?.pastorName || "";
-                } catch (error) {
-                    console.error("Erro ao buscar dados da igreja:", error);
-                }
-            }
-
-            const registrationData = {
-                eventId: event.id,
-                userId: currentUser.uid,
-                status: "pending",
-                paymentStatus: "pending",
-                createdAt: new Date(),
-                updatedAt: new Date(),
-                // Dados do usuário
-                userName: userData.name || "",
-                userEmail: userData.email || "",
-                userPhone: userData.phone || "",
-                userChurch: userData.churchId || "",
-                churchName: userData.churchName || "",
-                pastorName: pastorName,
-            };
-
-            await addDoc(collection(db, "registrations"), registrationData);
-            
+        // Verificar se o usuário pode se inscrever (dados completos)
+        if (!canUserRegister) {
             Alert.alert(
-                "Sucesso!",
-                "Sua inscrição foi realizada com sucesso. Aguarde a aprovação.",
+                "Dados Incompletos",
+                errorMessage || "Complete seus dados no perfil antes de se inscrever em eventos.",
                 [
                     {
-                        text: "OK",
-                        onPress: () => {
-                            checkUserRegistration();
-                        },
+                        text: "Ir para Perfil",
+                        onPress: () => navigation.navigate("Profile"),
+                    },
+                    {
+                        text: "Cancelar",
+                        style: "cancel",
                     },
                 ]
             );
-        } catch (error) {
+            return;
+        }
+
+        setRegistering(true);
+        
+        try {
+            const result = await registerForEvent(
+                eventId, 
+                currentUser.uid,
+                {
+                    name: userData.name || '',
+                    email: userData.email || '',
+                    phone: userData.phone || '',
+                    church: userData.churchId || '',
+                    cpf: userData.cpf || ''
+                },
+                userData
+            );
+            
+            if (result.success) {
+                Alert.alert(
+                    "Sucesso!",
+                    result.message,
+                    [
+                        {
+                            text: "OK",
+                            onPress: () => {
+                                checkUserRegistration();
+                                // Recarregar o evento para atualizar o contador
+                                loadEvent();
+                            },
+                        },
+                    ]
+                );
+            } else {
+                Alert.alert("Erro", result.message);
+            }
+        } catch (error: any) {
             console.error("Erro ao realizar inscrição:", error);
-            Alert.alert("Erro", "Não foi possível realizar a inscrição. Tente novamente.");
+            Alert.alert("Erro", error.message || "Não foi possível realizar a inscrição. Tente novamente.");
         } finally {
             setRegistering(false);
         }
@@ -191,7 +203,7 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
     };
 
     const canRegister = () => {
-        return currentUser && !userRegistration && event?.status === "active";
+        return currentUser && !userRegistration && event?.status === "active" && canUserRegister;
     };
 
     if (loading) {
@@ -263,6 +275,22 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
                                 Pagamento: {userRegistration.paymentStatus === "paid" ? "Pago" : "Pendente"}
                             </Text>
                         </View>
+                    </View>
+                )}
+
+                {/* Aviso sobre dados incompletos */}
+                {currentUser && !canUserRegister && !userRegistration && (
+                    <View style={styles.warningSection}>
+                        <Text style={styles.warningTitle}>⚠️ Dados Incompletos</Text>
+                        <Text style={styles.warningText}>
+                            {errorMessage || "Complete seus dados no perfil antes de se inscrever em eventos."}
+                        </Text>
+                        <TouchableOpacity
+                            style={styles.profileButton}
+                            onPress={() => navigation.navigate("Profile")}
+                        >
+                            <Text style={styles.profileButtonText}>Completar Perfil</Text>
+                        </TouchableOpacity>
                     </View>
                 )}
 
@@ -417,5 +445,36 @@ const styles = StyleSheet.create({
     errorText: {
         fontSize: 18,
         color: "#666",
+    },
+    warningSection: {
+        backgroundColor: "#fff3cd",
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 20,
+        borderWidth: 1,
+        borderColor: "#ffeaa7",
+    },
+    warningTitle: {
+        fontSize: 16,
+        fontWeight: "bold",
+        color: "#856404",
+        marginBottom: 8,
+    },
+    warningText: {
+        fontSize: 14,
+        color: "#856404",
+        marginBottom: 12,
+        lineHeight: 20,
+    },
+    profileButton: {
+        backgroundColor: "#ffc107",
+        borderRadius: 8,
+        padding: 12,
+        alignItems: "center",
+    },
+    profileButtonText: {
+        color: "#212529",
+        fontSize: 14,
+        fontWeight: "600",
     },
 });

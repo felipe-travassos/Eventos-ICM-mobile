@@ -87,7 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    const register = async (email: string, password: string, name: string) => {
+    const register = async (email: string, password: string, name: string, cpf?: string, phone?: string, churchId?: string) => {
         try {
             const { user } = await createUserWithEmailAndPassword(auth, email, password);
             
@@ -95,9 +95,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 uid: user.uid,
                 name,
                 email,
-                phone: "",
-                cpf: "",
-                churchId: "",
+                phone: phone || "",
+                cpf: cpf || "",
+                churchId: churchId || "",
                 role: "membro" as UserRole,
                 createdAt: new Date(),
                 updatedAt: new Date(),

@@ -1,4 +1,4 @@
-﻿// src/screens/EventsScreen.tsx
+// src/screens/EventsScreen.tsx
 import React, { useState, useEffect } from "react";
 import {
     View,
@@ -10,9 +10,8 @@ import {
     ActivityIndicator,
     RefreshControl,
 } from "react-native";
-import { collection, getDocs, query, where, orderBy } from "firebase/firestore";
-import { db } from "../lib/firebase/config";
 import { Event } from "../types";
+import { getActiveEventsWithSync } from "../lib/firebase/events";
 
 interface EventsScreenProps {
     navigation: any;
@@ -25,21 +24,8 @@ export default function EventsScreen({ navigation }: EventsScreenProps) {
 
     const loadEvents = async () => {
         try {
-            const eventsQuery = query(
-                collection(db, "events"),
-                where("status", "==", "active"),
-                orderBy("date", "asc")
-            );
-            
-            const snapshot = await getDocs(eventsQuery);
-            const eventsData = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data(),
-                date: doc.data().date?.toDate() || new Date(),
-                createdAt: doc.data().createdAt?.toDate() || new Date(),
-                updatedAt: doc.data().updatedAt?.toDate() || new Date(),
-            })) as Event[];
-
+            console.log('🔄 Carregando eventos com sincronização...');
+            const eventsData = await getActiveEventsWithSync();
             setEvents(eventsData);
         } catch (error) {
             console.error("Erro ao carregar eventos:", error);
