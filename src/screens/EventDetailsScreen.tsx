@@ -142,7 +142,7 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
                             onPress: () => {
                                 checkUserRegistration();
                                 // Recarregar o evento para atualizar o contador
-                                loadEvent();
+                                loadEventDetails();
                             },
                         },
                     ]

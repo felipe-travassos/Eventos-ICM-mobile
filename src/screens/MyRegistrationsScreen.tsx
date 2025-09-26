@@ -1,5 +1,6 @@
 // src/screens/MyRegistrationsScreen.tsx
 import React, { useState, useEffect } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import {
     View,
     Text,
@@ -13,7 +14,7 @@ import {
     Linking,
     Clipboard,
 } from "react-native";
-import { collection, getDocs, query, where, orderBy, doc, deleteDoc } from "firebase/firestore";
+import { collection, getDocs, query, where, orderBy, doc, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../lib/firebase/config";
 import { EventRegistration, Event, PaymentData } from "../types";
 import { useAuth } from "../contexts/AuthContext";
@@ -59,14 +60,10 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
             const registrationsWithEvents = await Promise.all(
                 registrationsData.map(async (registration) => {
                     try {
-                        const eventQuery = query(
-                            collection(db, "events"),
-                            where("__name__", "==", registration.eventId)
-                        );
-                        const eventSnapshot = await getDocs(eventQuery);
+                        // Usar getDoc em vez de query com __name__
+                        const eventDoc = await getDoc(doc(db, "events", registration.eventId));
                         
-                        if (!eventSnapshot.empty) {
-                            const eventDoc = eventSnapshot.docs[0];
+                        if (eventDoc.exists()) {
                             const eventData = {
                                 id: eventDoc.id,
                                 ...eventDoc.data(),
@@ -96,6 +93,15 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
     useEffect(() => {
         loadRegistrations();
     }, [currentUser]);
+
+    // Recarregar inscrições quando a tela receber foco
+    useFocusEffect(
+        React.useCallback(() => {
+            if (currentUser) {
+                loadRegistrations();
+            }
+        }, [currentUser])
+    );
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -163,56 +169,52 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
     };
 
     const canMakePayment = (registration: EventRegistration & { event?: Event }) => {
-        // Pode fazer pagamento se estiver aprovado e pagamento pendente
-        return registration.status === "approved" && registration.paymentStatus === "pending" && registration.event?.price && registration.event.price > 0;
+        // Pode fazer pagamento se:
+        // 1. Estiver aprovado OU pendente (para permitir pagamento antecipado)
+        // 2. Pagamento estiver pendente (não pago ainda)
+        // 3. Evento tiver preço maior que 0
+        // 4. OU se já tiver paymentId (para ver PIX existente)
+        const hasPrice = registration.event?.price && registration.event.price > 0;
+        const canPay = (registration.status === "approved" || registration.status === "pending") && 
+                       registration.paymentStatus === "pending" && 
+                       hasPrice;
+        const canViewPix = registration.paymentId && hasPrice;
+        
+        return canPay || canViewPix;
     };
 
     const handlePayment = async (registration: EventRegistration & { event?: Event }) => {
         if (!userData || !registration.event) return;
 
-        console.log('🚀 Iniciando processo de pagamento para:', registration.id);
+        console.log('Iniciando processo de pagamento para:', registration.id);
 
         // ✅ Verificar se já existe um paymentId
         if (registration.paymentId) {
-            console.log('💾 Pagamento já existe, recuperando dados do PIX...');
-            console.log('🔍 PaymentId encontrado:', registration.paymentId);
+            console.log('Pagamento já existe, recuperando dados do PIX...');
             
             try {
                 // Buscar dados do pagamento existente
-                const statusUrl = `http://192.168.1.100:3000/api/pix/status?paymentId=${registration.paymentId}&registrationId=${registration.id}`;
-                console.log('📡 Fazendo requisição para status:', statusUrl);
-                
+                const statusUrl = `http://192.168.100.4:3000/api/pix/status?paymentId=${registration.paymentId}&registrationId=${registration.id}`;
                 const response = await fetch(statusUrl);
-                console.log('📊 Status response:', response.status, response.ok);
 
                 if (response.ok) {
-                    const statusData = await response.json();
-                    console.log('✅ Status data recebido:', statusData);
-
                     // Buscar dados completos do PIX
-                    const pixUrl = `http://192.168.1.100:3000/api/pix/get-payment?paymentId=${registration.paymentId}`;
-                    console.log('📡 Fazendo requisição para PIX data:', pixUrl);
-                    
+                    const pixUrl = `http://192.168.100.4:3000/api/pix/get-payment?paymentId=${registration.paymentId}`;
                     const pixResponse = await fetch(pixUrl);
-                    console.log('📊 PIX response:', pixResponse.status, pixResponse.ok);
 
                     if (pixResponse.ok) {
                         const pixData = await pixResponse.json();
-                        console.log('✅ PIX data recebido:', JSON.stringify(pixData, null, 2));
                         
                         // Verificar se os dados essenciais existem
                         if (!pixData.qr_code || !pixData.qr_code_base64) {
-                            console.error('❌ Dados essenciais do PIX não encontrados:', {
-                                hasQrCode: !!pixData.qr_code,
-                                hasQrCodeBase64: !!pixData.qr_code_base64,
-                                hasTicketUrl: !!pixData.ticket_url
-                            });
+                            console.log('Dados essenciais do PIX não encontrados, criando novo pagamento');
                             // Continuar para criar novo pagamento
                         } else {
                             // Criar PaymentData compatível
                             const existingPaymentData = {
                                 registrationId: registration.id,
                                 eventId: registration.eventId,
+                                eventName: registration.event.title,
                                 amount: registration.event.price || 0,
                                 description: `Inscrição: ${registration.event.title}`,
                                 qrCode: pixData.qr_code,
@@ -222,38 +224,26 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                                 externalReference: pixData.external_reference
                             };
 
-                            console.log('🎯 PaymentData criado:', JSON.stringify(existingPaymentData, null, 2));
+                            console.log('Exibindo PIX existente');
                             
-                            // Verificar se setPaymentData e setShowPaymentModal existem
-                            console.log('🔧 Verificando funções:', {
-                                hasSetPaymentData: typeof setPaymentData === 'function',
-                                hasSetShowPaymentModal: typeof setShowPaymentModal === 'function'
-                            });
-                            
+                            // Definir dados do pagamento e mostrar modal
                             setPaymentData(existingPaymentData);
                             setShowPaymentModal(true);
-                            
-                            console.log('✅ PIX existente recuperado com sucesso - Modal deve abrir');
-                            console.log('🎯 Estado atual:', {
-                                paymentDataSet: !!existingPaymentData,
-                                modalShouldShow: true
-                            });
-                            return;
+                            return; // Sair da função aqui
                         }
                     } else {
-                        const pixError = await pixResponse.text();
-                        console.error('❌ Erro na resposta do PIX:', pixError);
+                        console.log('Erro na resposta do PIX, criando novo pagamento');
                     }
                 } else {
-                    const statusError = await response.text();
-                    console.error('❌ Erro na resposta do status:', statusError);
+                    console.log('Erro na resposta do status, criando novo pagamento');
                 }
 
                 // Se não conseguir buscar, continuar para criar novo
-                console.log('⚠️ Não foi possível recuperar PIX existente, criando novo...');
+                console.log('Não foi possível recuperar PIX existente, criando novo...');
             } catch (error) {
-                console.error('❌ Erro ao recuperar PIX existente:', error);
-                // Continuar para criar novo pagamento
+                console.log('Erro ao recuperar PIX existente, criando novo:', error);
+                Alert.alert('Erro', 'Erro ao recuperar dados do PIX. Tente novamente.');
+                return;
             }
         }
 
@@ -291,7 +281,7 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
         if (!paymentData?.paymentId) return;
 
         try {
-            console.log('🔍 Verificando status do pagamento...');
+            console.log('Verificando status do pagamento...');
 
             const statusResult = await checkPaymentStatus(paymentData.paymentId, paymentData.registrationId);
 
@@ -306,14 +296,14 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                         : reg
                 ));
 
-                Alert.alert('Sucesso', '✅ Pagamento confirmado! Inscrição ativada.');
+                Alert.alert('Sucesso', 'Pagamento confirmado! Inscrição ativada.');
                 setShowPaymentModal(false);
                 setPaymentData(null);
             } else {
-                Alert.alert('Aguarde', `⚠️ Pagamento ainda não confirmado. Status: ${statusResult.status}. Tente novamente em alguns instantes.`);
+                Alert.alert('Aguarde', `Pagamento ainda não confirmado. Status: ${statusResult.status}. Tente novamente em alguns instantes.`);
             }
         } catch (error: any) {
-            console.error('❌ Erro ao verificar status:', error);
+            console.log('Erro ao verificar status:', error);
             Alert.alert('Erro', `Erro ao verificar status: ${error.message}`);
         }
     };
@@ -332,6 +322,26 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
         try {
             // Excluir do Firebase
             await deleteDoc(doc(db, "registrations", registrationToDelete.id));
+            
+            // Decrementar o contador de participantes do evento
+            if (registrationToDelete.eventId) {
+                const eventRef = doc(db, "events", registrationToDelete.eventId);
+                const eventDoc = await getDoc(eventRef);
+                
+                if (eventDoc.exists()) {
+                    const eventData = eventDoc.data();
+                    const currentParticipants = eventData.currentParticipants || 0;
+                    
+                    // Decrementar apenas se o contador for maior que 0
+                    if (currentParticipants > 0) {
+                        await updateDoc(eventRef, {
+                            currentParticipants: currentParticipants - 1,
+                            updatedAt: new Date()
+                        });
+                        console.log(`✅ Contador do evento ${registrationToDelete.eventId} decrementado: ${currentParticipants} -> ${currentParticipants - 1}`);
+                    }
+                }
+            }
             
             // Atualizar estado local
             setRegistrations(prev => prev.filter(reg => reg.id !== registrationToDelete.id));
