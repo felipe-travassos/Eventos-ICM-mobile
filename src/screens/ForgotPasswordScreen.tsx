@@ -1,4 +1,4 @@
-﻿// src/screens/LoginScreen.tsx
+// src/screens/ForgotPasswordScreen.tsx
 import React, { useState } from "react";
 import {
     View,
@@ -12,46 +12,47 @@ import {
 import Toast from 'react-native-toast-message';
 import { useAuth } from "../contexts/AuthContext";
 
-interface LoginScreenProps {
+interface ForgotPasswordScreenProps {
     navigation: any;
 }
 
-export default function LoginScreen({ navigation }: LoginScreenProps) {
+export default function ForgotPasswordScreen({ navigation }: ForgotPasswordScreenProps) {
     const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
-    const { login } = useAuth();
+    const { resetPassword } = useAuth();
 
-    const handleLogin = async () => {
-        if (!email || !password) {
+    const handleResetPassword = async () => {
+        if (!email) {
             Toast.show({
                 type: 'error',
                 text1: 'Erro',
-                text2: 'Por favor, preencha todos os campos'
+                text2: 'Por favor, digite seu email'
             });
             return;
         }
 
         setLoading(true);
         try {
-            await login(email, password);
+            await resetPassword(email);
+            Toast.show({
+                type: 'success',
+                text1: 'Sucesso!',
+                text2: `Um email com instruções foi enviado para ${email}`,
+                onHide: () => navigation.navigate("Login")
+            });
         } catch (error: any) {
             Toast.show({
                 type: 'error',
                 text1: 'Erro',
-                text2: error.message || 'Erro ao fazer login'
+                text2: error.message || 'Erro ao enviar email de redefinição'
             });
         } finally {
             setLoading(false);
         }
     };
 
-    const handleForgotPassword = () => {
-        navigation.navigate("ForgotPassword");
-    };
-
-    const handleRegister = () => {
-        navigation.navigate("Register");
+    const handleBackToLogin = () => {
+        navigation.navigate("Login");
     };
 
     return (
@@ -63,8 +64,10 @@ export default function LoginScreen({ navigation }: LoginScreenProps) {
         >
             <View style={styles.overlay}>
                 <View style={styles.container}>
-                    <Text style={styles.title}>Eventos ICM</Text>
-                    <Text style={styles.subtitle}>Faça login para continuar</Text>
+                    <Text style={styles.title}>Esqueci minha senha</Text>
+                    <Text style={styles.subtitle}>
+                        Digite seu email para receber instruções de redefinição de senha
+                    </Text>
 
                     <TextInput
                         style={styles.input}
@@ -75,36 +78,21 @@ export default function LoginScreen({ navigation }: LoginScreenProps) {
                         autoCapitalize="none"
                     />
 
-                    <TextInput
-                        style={styles.input}
-                        placeholder="Senha"
-                        value={password}
-                        onChangeText={setPassword}
-                        secureTextEntry
-                    />
-
                     <TouchableOpacity
-                        style={styles.loginButton}
-                        onPress={handleLogin}
+                        style={styles.resetButton}
+                        onPress={handleResetPassword}
                         disabled={loading}
                     >
                         {loading ? (
                             <ActivityIndicator color="#fff" />
                         ) : (
-                            <Text style={styles.loginButtonText}>Entrar</Text>
+                            <Text style={styles.resetButtonText}>Enviar Email</Text>
                         )}
                     </TouchableOpacity>
 
-                    <TouchableOpacity onPress={handleForgotPassword}>
-                        <Text style={styles.forgotPasswordText}>Esqueci minha senha</Text>
+                    <TouchableOpacity onPress={handleBackToLogin}>
+                        <Text style={styles.backToLoginText}>Voltar ao Login</Text>
                     </TouchableOpacity>
-
-                    <View style={styles.registerContainer}>
-                        <Text style={styles.registerText}>Não tem uma conta? </Text>
-                        <TouchableOpacity onPress={handleRegister}>
-                            <Text style={styles.registerLink}>Cadastre-se</Text>
-                        </TouchableOpacity>
-                    </View>
                 </View>
             </View>
         </ImageBackground>
@@ -125,46 +113,52 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         justifyContent: "center",
-        paddingHorizontal: 20,
+        alignItems: "center",
+        paddingHorizontal: 30,
     },
     title: {
-        fontSize: 32,
+        fontSize: 28,
         fontWeight: "bold",
-        textAlign: "center",
-        marginBottom: 10,
         color: "#333",
+        marginBottom: 10,
+        textAlign: "center",
         textShadowColor: 'rgba(255, 255, 255, 0.8)',
         textShadowOffset: { width: 1, height: 1 },
         textShadowRadius: 2,
     },
     subtitle: {
         fontSize: 16,
-        textAlign: "center",
-        marginBottom: 40,
         color: "#666",
+        marginBottom: 40,
+        textAlign: "center",
+        lineHeight: 22,
         textShadowColor: 'rgba(255, 255, 255, 0.8)',
         textShadowOffset: { width: 1, height: 1 },
         textShadowRadius: 2,
     },
     input: {
-        backgroundColor: "rgba(255, 255, 255, 0.9)",
-        paddingHorizontal: 15,
-        paddingVertical: 12,
-        borderRadius: 8,
-        marginBottom: 15,
+        width: "100%",
+        height: 50,
         borderWidth: 1,
         borderColor: "#ddd",
+        borderRadius: 8,
+        paddingHorizontal: 15,
+        marginBottom: 20,
         fontSize: 16,
+        backgroundColor: "rgba(255, 255, 255, 0.9)",
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.1,
         shadowRadius: 4,
         elevation: 3,
     },
-    loginButton: {
+    resetButton: {
+        width: "100%",
+        height: 50,
         backgroundColor: "#007AFF",
-        paddingVertical: 15,
         borderRadius: 8,
+        justifyContent: "center",
+        alignItems: "center",
         marginBottom: 20,
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 2 },
@@ -172,33 +166,16 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 5,
     },
-    loginButtonText: {
+    resetButtonText: {
         color: "#fff",
         textAlign: "center",
         fontSize: 16,
         fontWeight: "600",
     },
-    forgotPasswordText: {
+    backToLoginText: {
         textAlign: "center",
         color: "#007AFF",
-        marginBottom: 30,
-        textShadowColor: 'rgba(255, 255, 255, 0.8)',
-        textShadowOffset: { width: 1, height: 1 },
-        textShadowRadius: 2,
-    },
-    registerContainer: {
-        flexDirection: "row",
-        justifyContent: "center",
-    },
-    registerText: {
-        color: "#666",
-        textShadowColor: 'rgba(255, 255, 255, 0.8)',
-        textShadowOffset: { width: 1, height: 1 },
-        textShadowRadius: 2,
-    },
-    registerLink: {
-        color: "#007AFF",
-        fontWeight: "600",
+        fontSize: 16,
         textShadowColor: 'rgba(255, 255, 255, 0.8)',
         textShadowOffset: { width: 1, height: 1 },
         textShadowRadius: 2,

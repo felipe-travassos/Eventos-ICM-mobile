@@ -25,6 +25,14 @@ export interface PaymentRequest {
         email: string;
         first_name: string;
         last_name: string;
+        identification?: {
+            type: string;
+            number: string;
+        };
+        phone?: {
+            area_code: string;
+            number: string;
+        };
     };
     metadata: {
         registrationId: string;
@@ -32,6 +40,19 @@ export interface PaymentRequest {
         eventName: string;
         userId: string;
         userName: string;
+    };
+    additional_info?: {
+        items?: Array<{
+            id: string;
+            title: string;
+            description: string;
+            category_id: string;
+            quantity: number;
+            unit_price: number;
+        }>;
+        payer?: {
+            registration_date?: string;
+        };
     };
 }
 
@@ -77,7 +98,33 @@ export const createPixPayment = async (paymentRequest: PaymentRequest): Promise<
 /**
  * Verifica o status de um pagamento
  */
-export const checkPaymentStatus = async (paymentId: string, registrationId: string) => {
+export interface PaymentStatusResponse {
+    status: string;
+    status_detail?: string;
+    transaction_amount?: number;
+    payer?: {
+        email?: string;
+        name?: string;
+        identification?: {
+            type: string;
+            number: string;
+        };
+        phone?: {
+            area_code: string;
+            number: string;
+        };
+    };
+    items?: Array<{
+        id: string;
+        title: string;
+        description: string;
+        category_id: string;
+        quantity: number;
+        unit_price: number;
+    }>;
+}
+
+export const checkPaymentStatus = async (paymentId: string, registrationId: string): Promise<PaymentStatusResponse> => {
     try {
         console.log('🔍 Verificando status do pagamento...', paymentId);
 
@@ -88,7 +135,16 @@ export const checkPaymentStatus = async (paymentId: string, registrationId: stri
             throw new Error(errorData.error || 'Erro ao verificar status');
         }
 
-        return await response.json();
+        const statusData = await response.json();
+        
+        console.log('✅ Status recebido:', {
+            status: statusData.status,
+            status_detail: statusData.status_detail,
+            amount: statusData.transaction_amount,
+            payer: statusData.payer
+        });
+
+        return statusData;
     } catch (error) {
         console.error('❌ Erro ao verificar status do pagamento:', error);
         throw error;
@@ -242,6 +298,19 @@ export const processRegistrationPayment = async (
                 userId: userData.uid,
                 userName: userData.name,
             },
+            additional_info: {
+                items: [{
+                    id: eventData.id,
+                    title: eventData.title,
+                    description: `Inscrição para o evento: ${eventData.title}`,
+                    category_id: 'events',
+                    quantity: 1,
+                    unit_price: eventData.price || 0,
+                }],
+                payer: {
+                    registration_date: new Date().toISOString(),
+                }
+            }
         };
 
         const paymentData = await createPixPayment(paymentRequest);
@@ -255,5 +324,50 @@ export const processRegistrationPayment = async (
     } catch (error) {
         console.error('❌ Erro no processamento de pagamento:', error);
         throw error;
+    }
+};
+
+export interface CancelPaymentResponse {
+    success: boolean;
+    message: string;
+    currentStatus?: string;
+    data?: any;
+    error?: string;
+    details?: any;
+}
+
+export const cancelPixPayment = async (paymentId: string, registrationId: string): Promise<CancelPaymentResponse> => {
+    try {
+        console.log('🔄 Iniciando cancelamento do PIX:', { paymentId, registrationId });
+
+        const response = await fetch(`${API_BASE_URL}/api/pix/cancel`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                paymentId,
+                registrationId
+            }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error('❌ Erro na resposta da API de cancelamento:', data);
+            throw new Error(data.message || 'Erro ao cancelar pagamento');
+        }
+
+        console.log('✅ Resposta do cancelamento:', data);
+        return data;
+
+    } catch (error: any) {
+        console.error('❌ Erro ao cancelar PIX:', error);
+        return {
+            success: false,
+            message: 'Erro ao cancelar pagamento PIX',
+            error: error.message,
+            details: error
+        };
     }
 };

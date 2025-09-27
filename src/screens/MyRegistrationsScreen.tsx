@@ -9,16 +9,17 @@ import {
     ActivityIndicator,
     RefreshControl,
     TouchableOpacity,
-    Alert,
     Modal,
     Linking,
     Clipboard,
 } from "react-native";
+import Toast from 'react-native-toast-message';
 import { collection, getDocs, query, where, orderBy, doc, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../lib/firebase/config";
 import { EventRegistration, Event, PaymentData } from "../types";
 import { useAuth } from "../contexts/AuthContext";
-import { processRegistrationPayment, checkPaymentStatus, updatePaymentStatus } from "../lib/firebase/payments";
+import { processRegistrationPayment, checkPaymentStatus, updatePaymentStatus, PaymentStatusResponse, cancelPixPayment, CancelPaymentResponse } from "../lib/firebase/payments";
+import { usePaymentStatusChecker } from "../lib/firebase/paymentStatusChecker";
 
 interface MyRegistrationsScreenProps {
     navigation: any;
@@ -34,7 +35,10 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
     const [processingPayment, setProcessingPayment] = useState<string | null>(null);
     const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
     const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+    const [cancellingPayment, setCancellingPayment] = useState<string | null>(null);
     const { currentUser, userData } = useAuth();
+    const { startChecking, stopChecking, checkOnce } = usePaymentStatusChecker();
 
     const loadRegistrations = async () => {
         if (!currentUser) return;
@@ -170,12 +174,12 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
 
     const canMakePayment = (registration: EventRegistration & { event?: Event }) => {
         // Pode fazer pagamento se:
-        // 1. Estiver aprovado OU pendente (para permitir pagamento antecipado)
+        // 1. Estiver APROVADO (não permite mais pagamento antecipado)
         // 2. Pagamento estiver pendente (não pago ainda)
         // 3. Evento tiver preço maior que 0
         // 4. OU se já tiver paymentId (para ver PIX existente)
         const hasPrice = registration.event?.price && registration.event.price > 0;
-        const canPay = (registration.status === "approved" || registration.status === "pending") && 
+        const canPay = registration.status === "approved" && 
                        registration.paymentStatus === "pending" && 
                        hasPrice;
         const canViewPix = registration.paymentId && hasPrice;
@@ -242,7 +246,11 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                 console.log('Não foi possível recuperar PIX existente, criando novo...');
             } catch (error) {
                 console.log('Erro ao recuperar PIX existente, criando novo:', error);
-                Alert.alert('Erro', 'Erro ao recuperar dados do PIX. Tente novamente.');
+                Toast.show({
+                    type: 'error',
+                    text1: 'Erro',
+                    text2: 'Erro ao recuperar dados do PIX. Tente novamente.'
+                });
                 return;
             }
         }
@@ -264,7 +272,11 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
 
         } catch (error: any) {
             console.error('❌ Erro no processo de pagamento:', error);
-            Alert.alert('Erro', `Erro ao processar pagamento: ${error.message}`);
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: `Erro ao processar pagamento: ${error.message}`
+            });
         } finally {
             setProcessingPayment(null);
         }
@@ -273,7 +285,11 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
     const handleCopyPix = () => {
         if (paymentData?.qrCode) {
             Clipboard.setString(paymentData.qrCode);
-            Alert.alert('Sucesso', 'Código PIX copiado para a área de transferência!');
+            Toast.show({
+                type: 'success',
+                text1: 'Sucesso',
+                text2: 'Código PIX copiado para a área de transferência!'
+            });
         }
     };
 
@@ -281,9 +297,10 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
         if (!paymentData?.paymentId) return;
 
         try {
+            setIsCheckingStatus(true);
             console.log('Verificando status do pagamento...');
 
-            const statusResult = await checkPaymentStatus(paymentData.paymentId, paymentData.registrationId);
+            const statusResult = await checkOnce(paymentData.paymentId, paymentData.registrationId);
 
             if (statusResult.status === 'approved') {
                 // Atualizar status no Firestore
@@ -296,16 +313,86 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                         : reg
                 ));
 
-                Alert.alert('Sucesso', 'Pagamento confirmado! Inscrição ativada.');
+                Toast.show({
+                    type: 'success',
+                    text1: 'Sucesso',
+                    text2: 'Pagamento confirmado! Inscrição ativada.'
+                });
                 setShowPaymentModal(false);
                 setPaymentData(null);
             } else {
-                Alert.alert('Aguarde', `Pagamento ainda não confirmado. Status: ${statusResult.status}. Tente novamente em alguns instantes.`);
+                Toast.show({
+                    type: 'info',
+                    text1: 'Aguarde',
+                    text2: `Pagamento ainda não confirmado. Status: ${statusResult.status}. Tente novamente em alguns instantes.`
+                });
             }
         } catch (error: any) {
             console.log('Erro ao verificar status:', error);
-            Alert.alert('Erro', `Erro ao verificar status: ${error.message}`);
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: `Erro ao verificar status: ${error.message}`
+            });
+        } finally {
+            setIsCheckingStatus(false);
         }
+    };
+
+    const startAutoStatusCheck = () => {
+        if (!paymentData?.paymentId) return;
+
+        console.log('🔄 Iniciando verificação automática de status');
+        setIsCheckingStatus(true);
+
+        startChecking(
+            paymentData.paymentId,
+            paymentData.registrationId,
+            (status: PaymentStatusResponse) => {
+                console.log('📊 Status recebido:', status);
+
+                if (status.status === 'approved') {
+                    // Atualizar status no Firestore
+                    updatePaymentStatus(paymentData.registrationId, 'paid');
+
+                    // Atualizar estado local
+                    setRegistrations(prev => prev.map(reg =>
+                        reg.id === paymentData.registrationId
+                            ? { ...reg, paymentStatus: 'paid' }
+                            : reg
+                    ));
+
+                    Toast.show({
+                        type: 'success',
+                        text1: '🎉 Pagamento Confirmado!',
+                        text2: 'Seu pagamento foi aprovado automaticamente. Inscrição ativada com sucesso!'
+                    });
+                    setShowPaymentModal(false);
+                    setPaymentData(null);
+                    setIsCheckingStatus(false);
+                } else if (['rejected', 'cancelled'].includes(status.status)) {
+                    Toast.show({
+                        type: 'error',
+                        text1: '❌ Pagamento Rejeitado',
+                        text2: `Seu pagamento foi ${status.status === 'rejected' ? 'rejeitado' : 'cancelado'}. Tente novamente ou entre em contato conosco.`
+                    });
+                    setIsCheckingStatus(false);
+                }
+            }
+        );
+    };
+
+    const stopAutoStatusCheck = () => {
+        console.log('⏹️ Parando verificação automática');
+        stopChecking();
+        setIsCheckingStatus(false);
+    };
+
+    // Cleanup quando o modal for fechado
+    const handleClosePaymentModal = () => {
+        stopAutoStatusCheck();
+        setShowPaymentModal(false);
+        setPaymentData(null);
     };
 
     const handleDeletePress = (registration: EventRegistration & { event?: Event }) => {
@@ -317,9 +404,26 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
         if (!registrationToDelete) return;
 
         setDeletingId(registrationToDelete.id);
+        setCancellingPayment(registrationToDelete.id);
         setShowDeleteModal(false);
 
         try {
+            // 🔄 Se houver paymentId, tentar cancelar o PIX primeiro
+            if (registrationToDelete.paymentId && registrationToDelete.paymentStatus === 'pending') {
+                console.log('🔄 Cancelando PIX antes de excluir inscrição...');
+                
+                const cancelResult = await cancelPixPayment(
+                    registrationToDelete.paymentId, 
+                    registrationToDelete.id
+                );
+
+                if (cancelResult.success) {
+                    console.log('✅ PIX cancelado com sucesso');
+                } else {
+                    console.log('⚠️ Não foi possível cancelar o PIX, mas continuando com a exclusão:', cancelResult.message);
+                }
+            }
+
             // Excluir do Firebase
             await deleteDoc(doc(db, "registrations", registrationToDelete.id));
             
@@ -346,12 +450,21 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
             // Atualizar estado local
             setRegistrations(prev => prev.filter(reg => reg.id !== registrationToDelete.id));
             
-            Alert.alert("Sucesso", "Inscrição excluída com sucesso!");
+            Toast.show({
+                type: 'success',
+                text1: 'Sucesso',
+                text2: 'Inscrição excluída com sucesso!'
+            });
         } catch (error) {
             console.error("Erro ao excluir inscrição:", error);
-            Alert.alert("Erro", "Não foi possível excluir a inscrição. Tente novamente.");
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: 'Não foi possível excluir a inscrição. Tente novamente.'
+            });
         } finally {
             setDeletingId(null);
+            setCancellingPayment(null);
             setRegistrationToDelete(null);
         }
     };
@@ -474,6 +587,13 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                                 {registrationToDelete?.event?.title || "este evento"}
                             </Text>?
                         </Text>
+                        
+                        {registrationToDelete?.paymentId && registrationToDelete?.paymentStatus === 'pending' && (
+                            <Text style={styles.modalWarning}>
+                                ⚠️ Há um pagamento PIX pendente. Tentaremos cancelá-lo automaticamente.
+                            </Text>
+                        )}
+                        
                         <Text style={styles.modalWarning}>
                             Esta ação não pode ser desfeita.
                         </Text>
@@ -489,8 +609,11 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                             <TouchableOpacity
                                 style={styles.modalConfirmButton}
                                 onPress={handleDeleteConfirm}
+                                disabled={cancellingPayment}
                             >
-                                <Text style={styles.modalConfirmText}>Excluir</Text>
+                                <Text style={styles.modalConfirmText}>
+                                    {cancellingPayment ? "Cancelando..." : "Excluir"}
+                                </Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -506,7 +629,15 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
             >
                 <View style={styles.modalOverlay}>
                     <View style={styles.pixModalContent}>
-                        <Text style={styles.pixModalTitle}>Pagamento PIX</Text>
+                        <View style={styles.pixModalHeader}>
+                            <Text style={styles.pixModalTitle}>Pagamento PIX</Text>
+                            <TouchableOpacity
+                                style={styles.pixCloseButtonTop}
+                                onPress={handleClosePaymentModal}
+                            >
+                                <Text style={styles.pixCloseButtonTopText}>✕</Text>
+                            </TouchableOpacity>
+                        </View>
                         
                         {paymentData && (
                             <>
@@ -534,8 +665,17 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                                     2. Abra seu app bancário{'\n'}
                                     3. Cole o código na área PIX{'\n'}
                                     4. Confirme o pagamento{'\n'}
-                                    5. Volte aqui e clique em "Verificar Status"
+                                    5. O status será verificado automaticamente
                                 </Text>
+                                
+                                {isCheckingStatus && (
+                                    <View style={styles.statusCheckingContainer}>
+                                        <ActivityIndicator size="small" color="#007AFF" />
+                                        <Text style={styles.statusCheckingText}>
+                                            Verificando status automaticamente...
+                                        </Text>
+                                    </View>
+                                )}
                                 
                                 <View style={styles.pixModalButtons}>
                                     <TouchableOpacity
@@ -546,17 +686,13 @@ export default function MyRegistrationsScreen({ navigation }: MyRegistrationsScr
                                     </TouchableOpacity>
                                     
                                     <TouchableOpacity
-                                        style={styles.pixCheckButton}
+                                        style={[styles.pixCheckButton, isCheckingStatus && styles.pixButtonDisabled]}
                                         onPress={handleCheckPaymentStatus}
+                                        disabled={isCheckingStatus}
                                     >
-                                        <Text style={styles.pixCheckButtonText}>🔍 Verificar Status</Text>
-                                    </TouchableOpacity>
-                                    
-                                    <TouchableOpacity
-                                        style={styles.pixCloseButton}
-                                        onPress={() => setShowPaymentModal(false)}
-                                    >
-                                        <Text style={styles.pixCloseButtonText}>Fechar</Text>
+                                        <Text style={styles.pixCheckButtonText}>
+                                            {isCheckingStatus ? "Verificando..." : "🔍 Verificar Agora"}
+                                        </Text>
                                     </TouchableOpacity>
                                 </View>
                             </>
@@ -787,12 +923,32 @@ const styles = StyleSheet.create({
         maxWidth: 400,
         maxHeight: '80%',
     },
+    pixModalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
     pixModalTitle: {
         fontSize: 20,
         fontWeight: 'bold',
         color: '#333',
-        marginBottom: 20,
-        textAlign: 'center',
+        flex: 1,
+    },
+    pixCloseButtonTop: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#F5F5F5',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#E5E5E5',
+    },
+    pixCloseButtonTopText: {
+        fontSize: 18,
+        color: '#666',
+        fontWeight: 'bold',
     },
     pixPaymentInfo: {
         marginBottom: 20,
@@ -867,6 +1023,53 @@ const styles = StyleSheet.create({
         color: '#FFFFFF',
         fontSize: 16,
         fontWeight: '600',
+    },
+    pixAutoButtonsRow: {
+        flexDirection: 'row',
+        gap: 8,
+        marginBottom: 8,
+    },
+    pixAutoButton: {
+        backgroundColor: '#17A2B8',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        flex: 1,
+        alignItems: 'center',
+    },
+    pixAutoButtonInactive: {
+        backgroundColor: '#6C757D',
+    },
+    pixAutoButtonStop: {
+        backgroundColor: '#DC3545',
+    },
+    pixAutoButtonActive: {
+        backgroundColor: '#DC3545',
+    },
+    pixAutoButtonText: {
+        color: '#FFFFFF',
+        fontSize: 14,
+        fontWeight: '600',
+        textAlign: 'center',
+    },
+    pixButtonDisabled: {
+        backgroundColor: '#CCCCCC',
+        opacity: 0.6,
+    },
+    statusCheckingContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        backgroundColor: '#E3F2FD',
+        borderRadius: 8,
+        marginBottom: 16,
+    },
+    statusCheckingText: {
+        marginLeft: 8,
+        fontSize: 14,
+        color: '#1976D2',
+        fontWeight: '500',
     },
     pixCloseButton: {
         backgroundColor: '#F5F5F5',

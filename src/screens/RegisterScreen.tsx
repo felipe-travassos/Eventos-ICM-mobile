@@ -7,11 +7,11 @@ import {
     TouchableOpacity,
     StyleSheet,
     ScrollView,
-    Alert,
     ActivityIndicator,
     KeyboardAvoidingView,
     Platform
 } from 'react-native';
+import Toast from 'react-native-toast-message';
 import { Picker } from '@react-native-picker/picker';
 import { useAuth } from '../contexts/AuthContext';
 import { Church } from '../types';
@@ -59,7 +59,11 @@ export default function RegisterScreen({ navigation }: RegisterScreenProps) {
             setChurches(churchesData.sort((a, b) => a.name.localeCompare(b.name)));
         } catch (error) {
             console.error('Erro ao carregar igrejas:', error);
-            Alert.alert('Erro', 'Não foi possível carregar a lista de igrejas');
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: 'Não foi possível carregar a lista de igrejas'
+            });
         } finally {
             setLoadingChurches(false);
         }
@@ -129,14 +133,23 @@ export default function RegisterScreen({ navigation }: RegisterScreenProps) {
                 formData.churchId
             );
             
-            Alert.alert(
-                'Sucesso!',
-                'Conta criada com sucesso!',
-                [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
-            );
+            Toast.show({
+                type: 'success',
+                text1: 'Sucesso!',
+                text2: 'Conta criada com sucesso!'
+            });
+            
+            // Navegar para login após um pequeno delay
+            setTimeout(() => {
+                navigation.navigate('Login');
+            }, 2000);
         } catch (error: any) {
             console.error('Erro no registro:', error);
-            Alert.alert('Erro', error.message || 'Erro ao criar conta');
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: error.message || 'Erro ao criar conta'
+            });
         } finally {
             setLoading(false);
         }

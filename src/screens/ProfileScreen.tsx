@@ -5,12 +5,12 @@ import {
     Text,
     StyleSheet,
     TouchableOpacity,
-    Alert,
     ScrollView,
     TextInput,
     ActivityIndicator,
     Modal,
 } from "react-native";
+import Toast from 'react-native-toast-message';
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
 import { useAuth } from "../contexts/AuthContext";
@@ -102,7 +102,11 @@ export default function ProfileScreen() {
         try {
             // Validate required fields
             if (!formData.name.trim()) {
-                Alert.alert("Erro", "Nome é obrigatório");
+                Toast.show({
+                    type: 'error',
+                    text1: 'Erro',
+                    text2: 'Nome é obrigatório'
+                });
                 return;
             }
 
@@ -125,10 +129,18 @@ export default function ProfileScreen() {
             updateUserData(updateData);
             
             setIsEditing(false);
-            Alert.alert("Sucesso", "Perfil atualizado com sucesso!");
+            Toast.show({
+                type: 'success',
+                text1: 'Sucesso',
+                text2: 'Perfil atualizado com sucesso!'
+            });
         } catch (error) {
             console.error("Erro ao salvar perfil:", error);
-            Alert.alert("Erro", "Não foi possível salvar as alterações");
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: 'Não foi possível salvar as alterações'
+            });
         } finally {
             setLoading(false);
         }
@@ -147,28 +159,24 @@ export default function ProfileScreen() {
     };
 
     const handleLogout = () => {
-        Alert.alert(
-            "Sair",
-            "Tem certeza que deseja sair da sua conta?",
-            [
-                {
-                    text: "Cancelar",
-                    style: "cancel",
-                },
-                {
-                    text: "Sair",
-                    style: "destructive",
-                    onPress: async () => {
-                        try {
-                            await logout();
-                        } catch (error) {
-                            console.error("Erro ao fazer logout:", error);
-                            Alert.alert("Erro", "Não foi possível sair da conta.");
-                        }
-                    },
-                },
-            ]
-        );
+        Toast.show({
+            type: 'info',
+            text1: 'Sair',
+            text2: 'Tem certeza que deseja sair da sua conta?',
+            visibilityTime: 4000,
+            onPress: async () => {
+                try {
+                    await logout();
+                } catch (error) {
+                    console.error("Erro ao fazer logout:", error);
+                    Toast.show({
+                        type: 'error',
+                        text1: 'Erro',
+                        text2: 'Não foi possível sair da conta.'
+                    });
+                }
+            }
+        });
     };
 
     const getRoleDisplayName = (role: string) => {

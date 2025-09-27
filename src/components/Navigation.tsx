@@ -1,13 +1,15 @@
-﻿// src/components/Navigation.tsx
+// src/components/Navigation.tsx
 import React from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
+import { Platform } from "react-native";
 
 import { useAuth } from "../contexts/AuthContext";
 import LoginScreen from "../screens/LoginScreen";
 import RegisterScreen from "../screens/RegisterScreen";
+import ForgotPasswordScreen from "../screens/ForgotPasswordScreen";
 import EventsScreen from "../screens/EventsScreen";
 import EventDetailsScreen from "../screens/EventDetailsScreen";
 import MyRegistrationsScreen from "../screens/MyRegistrationsScreen";
@@ -30,6 +32,7 @@ export type RootStackParamList = {
     Main: undefined;
     Login: undefined;
     Register: undefined;
+    ForgotPassword: undefined;
 };
 
 const Stack = createStackNavigator<EventsStackParamList>();
@@ -102,9 +105,10 @@ function MainTabs() {
                     backgroundColor: "#FFFFFF",
                     borderTopWidth: 1,
                     borderTopColor: "#E5E5EA",
-                    paddingBottom: 5,
-                    paddingTop: 5,
-                    height: 60,
+                    paddingBottom: Platform.OS === 'android' ? 15 : 10,
+                    paddingTop: 8,
+                    height: Platform.OS === 'android' ? 75 : 70,
+                    marginBottom: 0,
                 },
                 tabBarLabelStyle: {
                     fontSize: 12,
@@ -156,6 +160,7 @@ export default function Navigation() {
                     <>
                         <RootStack.Screen name="Login" component={LoginScreen} />
                         <RootStack.Screen name="Register" component={RegisterScreen} />
+                        <RootStack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
                     </>
                 )}
             </RootStack.Navigator>

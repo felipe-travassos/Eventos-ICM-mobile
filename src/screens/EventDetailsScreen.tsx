@@ -7,8 +7,8 @@ import {
     ScrollView,
     TouchableOpacity,
     ActivityIndicator,
-    Alert,
 } from "react-native";
+import Toast from 'react-native-toast-message';
 import { StackScreenProps } from "@react-navigation/stack";
 import { doc, getDoc, collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import { db } from "../lib/firebase/config";
@@ -53,12 +53,20 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
                 
                 setEvent(eventData);
             } else {
-                Alert.alert("Erro", "Evento não encontrado");
+                Toast.show({
+                    type: 'error',
+                    text1: 'Erro',
+                    text2: 'Evento não encontrado'
+                });
                 navigation.goBack();
             }
         } catch (error) {
             console.error("Erro ao carregar evento:", error);
-            Alert.alert("Erro", "Não foi possível carregar os detalhes do evento");
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: 'Não foi possível carregar os detalhes do evento'
+            });
         } finally {
             setLoading(false);
         }
@@ -99,20 +107,13 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
 
         // Verificar se o usuário pode se inscrever (dados completos)
         if (!canUserRegister) {
-            Alert.alert(
-                "Dados Incompletos",
-                errorMessage || "Complete seus dados no perfil antes de se inscrever em eventos.",
-                [
-                    {
-                        text: "Ir para Perfil",
-                        onPress: () => navigation.navigate("Profile"),
-                    },
-                    {
-                        text: "Cancelar",
-                        style: "cancel",
-                    },
-                ]
-            );
+            Toast.show({
+                type: 'warning',
+                text1: 'Dados Incompletos',
+                text2: errorMessage || 'Complete seus dados no perfil antes de se inscrever em eventos.',
+                visibilityTime: 4000,
+                onPress: () => navigation.navigate("Profile")
+            });
             return;
         }
 
@@ -133,26 +134,30 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
             );
             
             if (result.success) {
-                Alert.alert(
-                    "Sucesso!",
-                    result.message,
-                    [
-                        {
-                            text: "OK",
-                            onPress: () => {
-                                checkUserRegistration();
-                                // Recarregar o evento para atualizar o contador
-                                loadEventDetails();
-                            },
-                        },
-                    ]
-                );
+                Toast.show({
+                    type: 'success',
+                    text1: 'Sucesso!',
+                    text2: result.message,
+                    onHide: () => {
+                        checkUserRegistration();
+                        // Recarregar o evento para atualizar o contador
+                        loadEventDetails();
+                    }
+                });
             } else {
-                Alert.alert("Erro", result.message);
+                Toast.show({
+                    type: 'error',
+                    text1: 'Erro',
+                    text2: result.message
+                });
             }
         } catch (error: any) {
             console.error("Erro ao realizar inscrição:", error);
-            Alert.alert("Erro", error.message || "Não foi possível realizar a inscrição. Tente novamente.");
+            Toast.show({
+                type: 'error',
+                text1: 'Erro',
+                text2: error.message || 'Não foi possível realizar a inscrição. Tente novamente.'
+            });
         } finally {
             setRegistering(false);
         }
@@ -188,9 +193,9 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
                 case "confirmed":
                     return "Inscrição Confirmada";
                 case "pending":
-                    return "Inscrição Pendente";
+                    return "Aguardando Aprovação";
                 case "approved":
-                    return "Inscrição Aprovada";
+                    return "Aprovado - Pode Pagar";
                 case "rejected":
                     return "Inscrição Rejeitada";
                 case "cancelled":
@@ -200,6 +205,49 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
             }
         }
         return "Inscrever-se";
+    };
+
+    const getStatusColor = (status: string) => {
+        switch (status) {
+            case "confirmed":
+                return "#28a745"; // Verde
+            case "pending":
+                return "#ffc107"; // Amarelo
+            case "approved":
+                return "#007bff"; // Azul
+            case "rejected":
+                return "#dc3545"; // Vermelho
+            case "cancelled":
+                return "#6c757d"; // Cinza
+            default:
+                return "#6c757d";
+        }
+    };
+
+    const getStatusMessage = (registration: EventRegistration) => {
+        switch (registration.status) {
+            case "pending":
+                return "Sua inscrição foi enviada e está aguardando aprovação do secretário local, secretário regional ou pastor.";
+            case "approved":
+                return "Sua inscrição foi aprovada! Agora você pode realizar o pagamento.";
+            case "rejected":
+                return registration.rejectionReason 
+                    ? `Inscrição rejeitada: ${registration.rejectionReason}`
+                    : "Sua inscrição foi rejeitada. Entre em contato com a organização para mais informações.";
+            case "confirmed":
+                return "Inscrição confirmada e pagamento realizado com sucesso!";
+            case "cancelled":
+                return "Inscrição cancelada.";
+            default:
+                return "";
+        }
+    };
+
+    const canShowPaymentButton = () => {
+        return userRegistration && 
+               userRegistration.status === "approved" && 
+               userRegistration.paymentStatus === "pending" &&
+               event && event.price > 0;
     };
 
     const canRegister = () => {
@@ -267,13 +315,32 @@ export default function EventDetailsScreen({ route, navigation }: EventDetailsSc
                 {userRegistration && (
                     <View style={styles.registrationStatus}>
                         <Text style={styles.sectionTitle}>Status da Inscrição</Text>
-                        <View style={styles.statusCard}>
-                            <Text style={styles.statusText}>
-                                Status: {getRegistrationButtonText()}
+                        <View style={[styles.statusCard, { borderLeftColor: getStatusColor(userRegistration.status), borderLeftWidth: 4 }]}>
+                            <View style={styles.statusHeader}>
+                                <Text style={[styles.statusBadge, { backgroundColor: getStatusColor(userRegistration.status) }]}>
+                                    {getRegistrationButtonText()}
+                                </Text>
+                            </View>
+                            
+                            <Text style={styles.statusMessage}>
+                                {getStatusMessage(userRegistration)}
                             </Text>
-                            <Text style={styles.statusText}>
-                                Pagamento: {userRegistration.paymentStatus === "paid" ? "Pago" : "Pendente"}
-                            </Text>
+                            
+                            <View style={styles.statusDetails}>
+                                <Text style={styles.statusDetailText}>
+                                    Pagamento: {userRegistration.paymentStatus === "paid" ? "Pago" : "Pendente"}
+                                </Text>
+                                
+                                {userRegistration.approvedBy && userRegistration.approvedAt && (
+                                    <Text style={styles.statusDetailText}>
+                                        Aprovado em: {new Date(userRegistration.approvedAt).toLocaleDateString('pt-BR')}
+                                    </Text>
+                                )}
+                                
+                                <Text style={styles.statusDetailText}>
+                                    Inscrito em: {new Date(userRegistration.createdAt).toLocaleDateString('pt-BR')}
+                                </Text>
+                            </View>
                         </View>
                     </View>
                 )}
@@ -476,5 +543,35 @@ const styles = StyleSheet.create({
         color: "#212529",
         fontSize: 14,
         fontWeight: "600",
+    },
+    statusHeader: {
+        marginBottom: 12,
+    },
+    statusBadge: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "bold",
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 20,
+        textAlign: "center",
+        alignSelf: "flex-start",
+    },
+    statusMessage: {
+        fontSize: 14,
+        color: "#666",
+        lineHeight: 20,
+        marginBottom: 12,
+        fontStyle: "italic",
+    },
+    statusDetails: {
+        borderTopWidth: 1,
+        borderTopColor: "#e9ecef",
+        paddingTop: 12,
+    },
+    statusDetailText: {
+        fontSize: 13,
+        color: "#6c757d",
+        marginBottom: 4,
     },
 });
